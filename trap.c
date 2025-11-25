@@ -7,12 +7,15 @@
 #include "x86.h"
 #include "traps.h"
 #include "spinlock.h"
-
 // Interrupt descriptor table (shared by all CPUs).
 struct gatedesc idt[256];
 extern uint vectors[];  // in vectors.S: array of 256 entry pointers
 struct spinlock tickslock;
 uint ticks;
+
+extern int page_allocator_type;
+int mappages(pde_t *pgdir, void *va, uint size, uint pa, int perm);
+
 
 void
 tvinit(void)
@@ -48,13 +51,56 @@ trap(struct trapframe *tf)
  // CS 3320 project 2
  // You might need to change the folloiwng default page fault handling
  // for your project 2
- if(tf->trapno == T_PGFLT){                 // CS 3320 project 2
-    uint faulting_va;                       // CS 3320 project 2
-    faulting_va = rcr2();                   // CS 3320 project 2
-    cprintf("Unhandled page fault for va:0x%x!\n", faulting_va);     // CS 3320 project 2
- }
+// if(tf->trapno == T_PGFLT){                 // CS 3320 project 2
+//    uint faulting_va;                       // CS 3320 project 2
+//    faulting_va = rcr2();                   // CS 3320 project 2
+//    cprintf("Unhandled page fault for va:0x%x!\n", faulting_va);     // CS 3320 project 2
+// }
+ 
+if(tf->trapno == T_PGFLT){
+    uint faulting_va = rcr2();
+    struct proc *p = proc;   // use global proc
 
+    if(page_allocator_type != 1){
+      // DEFAULT allocator: just announce and let xv6 kill it.
+      cprintf("Unhandled page fault for va:0x%x!\n", faulting_va);
+      // do NOT return; fall through to default handling below
+    } else {
+      // -------- LAZY allocator path --------
+      // Valid heap access? (in this project, brk is last valid byte)
+      if(p && faulting_va <= p->sz){
+        uint va = PGROUNDDOWN(faulting_va);
+        char *mem = kalloc();
 
+        if(mem == 0){
+          cprintf("Allocating page on fault failed!\n");
+          // fall through to kill logic
+        } else {
+          memset(mem, 0, PGSIZE);
+          if(mappages(p->pgdir, (void*)va, PGSIZE, v2p(mem),
+                      PTE_W | PTE_U) < 0){
+            cprintf("mappages failed during lazy allocation!\n");
+            kfree(mem);
+            // fall through to kill logic
+          } else {
+            // Success: page mapped, resume instruction that faulted.
+            return;
+          }
+        }
+      } else {
+        // Address is outside valid heap (e.g. above brk) → illegal.
+        cprintf("Unhandled page fault!\n");
+        // fall through to default kill logic
+      }
+    }
+  }  
+  
+  
+  
+  
+  
+  
+  
   switch(tf->trapno){
   case T_IRQ0 + IRQ_TIMER:
     if(cpu->id == 0){
@@ -90,6 +136,7 @@ trap(struct trapframe *tf)
   //PAGEBREAK: 13
   default:
     if(proc == 0 || (tf->cs&3) == 0){
+	
       // In kernel, it must be our mistake.
       cprintf("unexpected trap %d from cpu %d eip %x (cr2=0x%x)\n",
               tf->trapno, cpu->id, tf->eip, rcr2());

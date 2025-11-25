@@ -109,23 +109,51 @@ userinit(void)
 int
 growproc(int n)
 {
-  uint sz;
-  
-  sz = proc->sz;
-  if(n > 0){
-    if((sz = allocuvm(proc->pgdir, sz, sz + n)) == 0)
-    {
-      cprintf("Allocating pages failed!\n"); // CS3320: project 2
-      return -1;
+  uint sz = proc->sz;
+
+  if(page_allocator_type == 0){     // DEFAULT allocator (original behavior)
+    if(n > 0){
+      if((sz = allocuvm(proc->pgdir, sz, sz + n)) == 0){
+        cprintf("Allocating pages failed!\n");
+        return -1;
+      }
+    } else if(n < 0){
+      if((sz = deallocuvm(proc->pgdir, sz, sz + n)) == 0){
+        cprintf("Deallocating pages failed!\n");
+        return -1;
+      }
     }
-  } else if(n < 0){
-    if((sz = deallocuvm(proc->pgdir, sz, sz + n)) == 0)
-    {
-      cprintf("Deallocating pages failed!\n"); // CS3320: project 2
-      return -1;
-    }
+    proc->sz = sz;
+    switchuvm(proc);
+    return 0;
   }
-  proc->sz = sz;
+
+  // ================= LAZY allocator =================
+  if(n > 0){
+    uint newsz = sz + n;
+    if(newsz >= KERNBASE || newsz < sz){
+      cprintf("Allocating pages failed!\n");
+      return -1;
+    }
+
+    // Just move brk; no physical allocation/mapping now
+    proc->sz = newsz;
+
+  } else if(n < 0){
+    uint newsz = sz + n;
+    if(newsz > sz){
+      cprintf("Deallocating pages failed!\n");
+      return -1;
+    }
+
+    // Actually unmap/free pages above new brk
+    if((sz = deallocuvm(proc->pgdir, sz, newsz)) == 0 && newsz != 0){
+      cprintf("Deallocating pages failed!\n");
+      return -1;
+    }
+    proc->sz = newsz;
+  }
+
   switchuvm(proc);
   return 0;
 }
